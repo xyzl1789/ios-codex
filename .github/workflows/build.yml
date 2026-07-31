@@ -8,113 +8,123 @@ on:
 jobs:
   build:
     runs-on: macos-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - name: Clone upstream Codex
         run: |
           git clone --depth 1 https://github.com/openai/codex.git upstream
-          echo "UPSTREAM_COMMIT=$(cd upstream && git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "COMMIT=$(cd upstream && git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-      - name: Install Rust + iOS target
+      - name: Install tools
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.95.0
           source "$HOME/.cargo/env"
           rustup target add aarch64-apple-ios
+          brew install dpkg
 
-      - name: Install dpkg for deb packaging
-        run: brew install dpkg
-
-      - name: Apply iOS patches
+      - name: Patch for iOS
+        working-directory: upstream/codex-rs
         run: |
-          cd upstream/codex-rs
+          # 1. arboard: remove wayland feature
           sed -i '' 's/arboard = { version = "3", features = \["wayland-data-control"\] }/arboard = { version = "3" }/' Cargo.toml
+          # 2. Release: disable LTO, more cgus
           sed -i '' 's/^lto = .*/lto = "off"/' Cargo.toml
           sed -i '' 's/^codegen-units = .*/codegen-units = 16/' Cargo.toml
+          # 3. process-hardening: +target_os = "ios"
           sed -i '' 's/target_os = "macos",/target_os = "macos",\'$'\n''    target_os = "ios",/' process-hardening/src/lib.rs
-          printf '%s\n' '' '// iOS compat' '#[cfg(all(target_os = "ios", target_arch = "aarch64"))]' '#[unsafe(no_mangle)]' 'pub extern "C" fn __chkstk_darwin() {}' '' > /tmp/cs.rs
-          sed -i '' '/^use tracing_subscriber::EnvFilter;$/r /tmp/cs.rs' cli/src/main.rs
+          # 4. __chkstk_darwin stub for iOS
+          sed -i '' '/^use tracing_subscriber::EnvFilter;$/a\
+          \
+          // iOS compat\
+          #[cfg(all(target_os = "ios", target_arch = "aarch64"))]\
+          #[unsafe(no_mangle)]\
+          pub extern "C" fn __chkstk_darwin() {}\
+          ' cli/src/main.rs
 
       - name: Build codex-rs
         run: |
           source "$HOME/.cargo/env"
           cd upstream/codex-rs
-          cargo build -p codex-cli --release --target aarch64-apple-ios 2>&1 | tail -50
+          cargo build -p codex-cli --release --target aarch64-apple-ios
 
       - name: Package rootless deb
         run: |
-          SRC=upstream/codex-rs/target/aarch64-apple-ios/release/codex
-          strip -x "$SRC" || true
-
-          D=build/rootless
-          mkdir -p "$D/var/jb/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex"
-          mkdir -p "$D/var/jb/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/path"
-          mkdir -p "$D/DEBIAN"
-
-          cp "$SRC" "$D/var/jb/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex/codex"
-
-          V="1.${GITHUB_RUN_NUMBER:-0}-${UPSTREAM_COMMIT}"
-          cat > "$D/DEBIAN/control" << EOC
-          Package: com.openai.codex-ios
-          Name: Codex CLI iOS Port
-          Version: ${V}
-          Architecture: iphoneos-arm64
-          Maintainer: xyzl
-          Author: xyzl
-          Section: Development
-          Priority: optional
-          Depends: firmware (>= 14.0)
-          Description: iOS arm64 port of OpenAI Codex CLI (rootless).
-           Codex is a coding agent from OpenAI that runs locally.
-           This is an iOS arm64 cross-compiled build for rootless jailbreaks.
-          EOC
-
-          cat > "$D/DEBIAN/postinst" << 'EOE'
-          #!/bin/sh
-          set -e
-          P="${JB_ROOT:-/var/jb}"
-          ldid -S "${P}/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex/codex" 2>/dev/null || true
-          echo "[ios-codex] rootless installed"
-          EOE
-          chmod 755 "$D/DEBIAN/postinst"
-
+          BIN=upstream/codex-rs/target/aarch64-apple-ios/release/codex
+          strip -x "$BIN" || true
           mkdir -p dist
-          dpkg-deb -b "$D" "dist/com.openai.codex-rootless_${V}_iphoneos-arm.deb"
 
-      - name: Package roothide deb
+          # Use existing packaging template, replace binary
+          cp -r packaging/debian rootless
+          cp "$BIN" rootless/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex/codex
+          chmod +x rootless/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex/codex
+
+          # Update version in control
+          V="1.${GITHUB_RUN_NUMBER:-0}-${COMMIT}"
+          sed -i '' "s/^Version:.*/Version: ${V}/" rootless/DEBIAN/control
+          sed -i '' "s/^Maintainer:.*/Maintainer: xyzl/" rootless/DEBIAN/control
+          sed -i '' "s/^Author:.*/Author: xyzl/" rootless/DEBIAN/control
+          sed -i '' "s/^Architecture:.*/Architecture: iphoneos-arm64/" rootless/DEBIAN/control
+          sed -i '' "s/^Package:.*/Package: com.openai.codex-ios/" rootless/DEBIAN/control
+
+          dpkg-deb -b rootless "dist/com.openai.codex-rootless_${V}_iphoneos-arm64.deb"
+
+      - name: Build roothide deb
         run: |
-          SRC=upstream/codex-rs/target/aarch64-apple-ios/release/codex
+          BIN=upstream/codex-rs/target/aarch64-apple-ios/release/codex
+          mkdir -p rh/var/jb/DEBIAN
+          mkdir -p rh/var/jb/usr/local/bin
+          mkdir -p rh/var/jb/usr/local/libexec
+          mkdir -p rh/var/jb/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex
+          mkdir -p rh/var/jb/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/path
 
-          D=build/roothide
-          mkdir -p "$D/var/jb/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex"
-          mkdir -p "$D/var/jb/usr/local/bin"
-          mkdir -p "$D/DEBIAN"
+          cp "$BIN" rh/var/jb/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex/codex
+          chmod +x rh/var/jb/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex/codex
 
-          cp "$SRC" "$D/var/jb/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex/codex"
+          # launcher
+          cat > rh/var/jb/usr/local/bin/codex << 'LSH'
+          #!/var/jb/usr/bin/sh
+          PREFIX="${JB_ROOT:-/var/jb}"
+          exec "${PREFIX}/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex/codex" "$@"
+          LSH
+          chmod +x rh/var/jb/usr/local/bin/codex
 
-          V="1.${GITHUB_RUN_NUMBER:-0}-${UPSTREAM_COMMIT}"
-          cat > "$D/DEBIAN/control" << EOC
-          Package: com.openai.codex-ios
-          Name: Codex CLI iOS Port
-          Version: ${V}
-          Architecture: iphoneos-arm64e
-          Maintainer: xyzl
-          Author: xyzl
-          Section: Development
-          Priority: optional
-          Depends: firmware (>= 14.0)
-          Description: iOS arm64 port of OpenAI Codex CLI (roothide).
-           Codex is a coding agent from OpenAI that runs locally.
-           This is an iOS arm64 cross-compiled build for roothide jailbreaks.
-          EOC
+          # rg shim
+          echo -e '#!/bin/sh\nexec grep -r "$@"' > rh/var/jb/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/path/rg
+          chmod +x rh/var/jb/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/path/rg
 
-          dpkg-deb -b "$D" "dist/com.openai.codex-roothide_${V}_iphoneos-arm64e.deb"
+          # postinst
+          cat > rh/var/jb/DEBIAN/postinst << 'PE'
+#!/bin/sh
+set -e
+P="${JB_ROOT:-/var/jb}"
+BIN="${P}/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex/codex"
+[ -f "$BIN" ] && ldid -S "$BIN" 2>/dev/null || true
+echo "[ios-codex] roothide installed"
+PE
+          chmod +x rh/var/jb/DEBIAN/postinst
 
-      - name: Upload debs
+          V="1.${GITHUB_RUN_NUMBER:-0}-${COMMIT}"
+          cat > rh/var/jb/DEBIAN/control << EOC
+Package: com.openai.codex-ios
+Name: Codex CLI iOS Port
+Version: ${V}
+Architecture: iphoneos-arm64e
+Maintainer: xyzl
+Author: xyzl
+Section: Development
+Priority: optional
+Depends: firmware (>= 14.0)
+Description: iOS port of OpenAI Codex CLI for roothide bootstrap.
+  Cross-compiled codex-rs binary targeting aarch64-apple-ios.
+EOC
+
+          dpkg-deb -b rh/var/jb "dist/com.openai.codex-roothide_${V}_iphoneos-arm64e.deb"
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: codex-ios-debs
           path: dist/*.deb
           retention-days: 7
-ENDOFWF
-echo "ok"
