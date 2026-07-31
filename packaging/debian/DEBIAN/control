@@ -1,11 +1,10 @@
 Package: com.openai.codex-ios
-Name: Codex iOS Compatibility Port
+Name: Codex CLI iOS Port
 Version: 0.0.0-6
 Architecture: iphoneos-arm
-Maintainer: davgz
-Depends: firmware (>= 13.0)
+Maintainer: xyzl
+Depends: firmware (>= 14.0)
 Section: Development
 Priority: optional
-Description: iOS compatibility port for latest OpenAI Codex CLI
- Installs an iOS-built codex binary, repair tooling, and launch wrappers.
- Includes codex-update for safe npm upgrades and automatic iOS patch replay.
+Description: iOS port of OpenAI Codex CLI for rootless jailbreaks.
+ Cross-compiled codex-rs binary targeting aarch64-apple-ios.
