@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+REPAIR="/usr/local/libexec/codex-ios-repair"
+if [ -x "$REPAIR" ]; then
+  "$REPAIR"
+else
+  echo "[codex-ios] warning: missing $REPAIR; package files may be incomplete" >&2
+fi
+
+exit 0
