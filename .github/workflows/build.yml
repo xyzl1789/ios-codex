@@ -28,6 +28,8 @@ jobs:
         run: bash scripts/patch-for-ios.sh
 
       - name: Build codex-rs
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: "14.0"
         run: |
           source "$HOME/.cargo/env"
           cd upstream/codex-rs
@@ -35,13 +37,13 @@ jobs:
 
       - name: Package rootless deb
         env:
-          BIN: upstream/codex-rs/target/aarch64-apple-ios/release/codex
+          BIN: codex-rs/target/aarch64-apple-ios/release/codex
           VERSION: 1.${{ github.run_number }}-${{ env.COMMIT }}
         run: bash scripts/package-rootless.sh
 
       - name: Package roothide deb
         env:
-          BIN: upstream/codex-rs/target/aarch64-apple-ios/release/codex
+          BIN: codex-rs/target/aarch64-apple-ios/release/codex
           VERSION: 1.${{ github.run_number }}-${{ env.COMMIT }}
         run: bash scripts/package-roothide.sh
 
@@ -51,3 +53,4 @@ jobs:
           name: codex-ios-debs
           path: dist/*.deb
           retention-days: 7
+WOVLEF
