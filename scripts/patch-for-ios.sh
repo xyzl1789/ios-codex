@@ -11,9 +11,9 @@ sed -i '' 's/arboard = { version = "3", features = \["wayland-data-control"\] }/
 sed -i '' 's/^lto = .*/lto = "off"/' Cargo.toml
 sed -i '' 's/^codegen-units = .*/codegen-units = 16/' Cargo.toml
 
-# 3. process-hardening: add target_os = " ios"
+# 3. process-hardening: add target_os = "ios"
 sed -i '' '/target_os = "macos",/a\
-    target_os = " ios",' process-hardening/src/lib.rs
+    target_os = "ios",' process-hardening/src/lib.rs
 
 # 4. __chkstk_darwin: C stub + cc build-dep + build.rs integration
 cat <<'CEOF' > cli/src/ios_chkstk.c
@@ -41,14 +41,14 @@ fi
 
 if ! grep -q 'ios_chkstk' cli/build.rs 2>/dev/null; then
   cat > /tmp/_codex_prefix.rs << 'BRSEOF'
-#[cfg(all(target_os = " ios", target_arch = "aarch64"))]
+#[cfg(all(target_os = "ios", target_arch = "aarch64"))]
 mod __codex_ios {
     pub fn build() {
         cc::Build::new().file("src/ios_chkstk.c").compile("ios_chkstk");
     }
 }
 
-#[cfg(not(all(target_os = " ios", target_arch = "aarch64")))]
+#[cfg(not(all(target_os = "ios", target_arch = "aarch64")))]
 mod __codex_ios {
     pub fn build() {}
 }
@@ -72,53 +72,51 @@ BRSEOF
   rm -f /tmp/_codex_prefix.rs
 fi
 
-# 5. Chinese localization — inject zh-CN instructions into default system prompt
-#    Search for "You are a coding agent" pattern in Rust source files and
-#    append a Chinese language instruction.
-echo "[ios-codex] applying zh-CN patches..."
+# 5. Chinese localization — append zh-CN instruction in get_model_instructions
+#    protocol/src/openai_models.rs :: get_model_instructions() is the single
+#    point that assembles system instructions.  Appending a zh-CN sentence
+#    ensures every personality + template combination gets it.
+ZH_TARGET="protocol/src/openai_models.rs"
+if [ -f "$ZH_TARGET" ]; then
+  echo "  .. patching $ZH_TARGET for zh-CN"
 
-# 5a. Find Rust source files containing the default agent prompt
-PROMPT_FILES=$(grep -rl "You are a coding agent\|assistant.*code\|coding agent\|system.prompt\|SYSTEM_PROMPT\|systemPrompt\|instructions_to" cli/src/ core/src/ 2>/dev/null || echo "")
+  python3 -c "
+p = '$ZH_TARGET'
+c = open(p).read()
 
-if [ -n "$PROMPT_FILES" ]; then
-  while IPE= read -r f; do
-    echo "  .. patching $f"
-    # Insert Chinese instruction at the end of the first multiline prompt string
-    # Strategy: replace "You are a coding agent..." with the same + zh-CN suffix
-    python3 -c "
-import re
-c = open('$f').read()
-# Pattern: s g= 'You are a coding agent' with enhanced zh-CN version
-new = c.replace(
-    'You are a coding agent',
-    '你是一个编码智能体'
-)
-# Also add a system instruction for Chinese if it mentions English
-new = re.sub(
-    r'(You are expected to be precise, safe, and helpful\.)',
-    r'\1\n\n你必须始终使用简体中文回复。中文为首选语言。代码注释和说明文字用中文。'
-    r'技术术语保留英文原词。',
-    new
-)
-open('$f','w').write(new)
+zh = '\\n\\n你必须始终使用简体中文回复。所有对话、代码注释、说明文字均用中文。专有技术术语保留英文原词。'
+
+# 1) template path
+old_tmpl = 'template.replace(PERSONALITY_PLACEHOLDER, personality_message.as_str())'
+new_tmpl = 'template.replace(PERSONALITY_PLACEHOLDER, personality_message.as_str()) + "' + zh + '"'
+c = c.replace(old_tmpl, new_tmpl)
+
+# 2) base-instructions path
+old_base = 'self.base_instructions.clone()'
+new_base = 'self.base_instructions.clone() + "' + zh + '"'
+c = c.replace(old_base, new_base)
+
+open(p,'w').write(c)
+print('   .. zh-CN injected')
 "
-  done <<< "$PROMPT_FILES"
-else
-  echo " .. prompt files auto-detect failed"
 fi
 
-# 5b. If no system prompt found, try the AGENTS.md fallback
-if grep -rq "you are a coding agent\|You are.*assistant" cli/src/ 2>/dev/null; then
-  echo "found agent description in cli/src/"
+
+# 6. Suppress "Model metadata for ... not found" warning on third-party models
+WARN_SRC="core/src/session/turn_context.rs"
+if [ -f "$WARN_SRC" ]; then
+  echo "  .. patching $WARN_SRC to suppress metadata warning"
+  python3 -c "
+import re
+t = open('$WARN_SRC').read()
+t = re.sub(
+    r'if tc\\.model_info\\.is_fallback_metadata \\{[^}]*\\}',
+    '/* iOS: third-party model fallback warning suppressed */',
+    t,
+    flags=re.DOTALL
+)
+open('$WARN_SRC','w').write(t)
+"
 fi
 
-# 5c. Look for default .codex/config.toml or instructions template
-INSTR_FILES=$(grep -rl "instructions.*=|prompt.*=.*String\|agent.*instructions\|AGENTS.md" cli/src/ core/src/ 2>/dev/null || echo "")
-if [ -n "$INSTR_FILES" ]; then
-  while IFS= read -r f; do
-    echo "  .. patching instruction file $f"
-  done <<< "$INSTR_FILES"
-fi
-
-echo "[ios-codex] zh-CN patches applied"
 echo "[ios-codex] all patches applied"
