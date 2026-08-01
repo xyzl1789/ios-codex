@@ -37,13 +37,13 @@ jobs:
 
       - name: Package rootless deb
         env:
-          BIN: codex-rs/target/aarch64-apple-ios/release/codex
+          BIN: upstream/codex-rs/target/aarch64-apple-ios/release/codex
           VERSION: 1.${{ github.run_number }}-${{ env.COMMIT }}
         run: bash scripts/package-rootless.sh
 
       - name: Package roothide deb
         env:
-          BIN: codex-rs/target/aarch64-apple-ios/release/codex
+          BIN: upstream/codex-rs/target/aarch64-apple-ios/release/codex
           VERSION: 1.${{ github.run_number }}-${{ env.COMMIT }}
         run: bash scripts/package-roothide.sh
 
