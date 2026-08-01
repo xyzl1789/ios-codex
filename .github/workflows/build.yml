@@ -34,6 +34,7 @@ jobs:
           source "$HOME/.cargo/env"
           cd upstream/codex-rs
           cargo build -p codex-cli --release --target aarch64-apple-ios
+          strip target/aarch64-apple-ios/release/codex
 
       - name: Package rootless deb
         env:
