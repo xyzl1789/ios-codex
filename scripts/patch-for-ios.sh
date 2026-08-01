@@ -72,34 +72,6 @@ BRSEOF
   rm -f /tmp/_codex_prefix.rs
 fi
 
-# 5. Chinese localization — append zh-CN instruction in get_model_instructions
-#    protocol/src/openai_models.rs is the single point that assembles
-#    system instructions.  Use sed to wrap the return value with a
-#    format!() that appends the Chinese sentence.
-ZH_TARGET="protocol/src/openai_models.rs"
-if [ -f "$ZH_TARGET" ]; then
-  echo "  .. patching $ZH_TARGET for zh-CN"
-  # strategy: replace
-  #   template.replace(PERSONALITY_PLACEHOLDER, ...)
-  # with
-  #   let __zh = template.replace(PERSONALITY_PLACEHOLDER, ...);
-  #   format!("{}\n\n...", __zh)
-  python3 -c "
-p = '$ZH_TARGET'
-t = open(p).read()
-# template path
-old = 'template.replace(PERSONALITY_PLACEHOLDER, personality_message.as_str())'
-new = 'format!(\"{}必须始终使用简体中文回复。所有对话、代码注释、说明文字均用中文。专有技术术语保留英文原词"\n         template.replace(PERSONALITY_PLACEHOLDER, personality_message.as_str()))'
-t = t.replace(old, new)
-# base-instructions path
-old2 = 'self.base_instructions.clone()'
-new2 = 'format!("{}必须始榈使用简体大⸭文回复。所有对话、代码注释、说明文字均用中新。专有技术术语保挈英文原词", self.base_instructions.clone())'
-t = t.replace(old2, new2)
-open(p,'w').write(t)
-print('   .. zh-CN injected')
-"
-fi
-
 # 6. Suppress "Model metadata for ... not found" warning on third-party models
 WARN_SRC="core/src/session/turn_context.rs"
 if [ -f "$WARN_SRC" ]; then

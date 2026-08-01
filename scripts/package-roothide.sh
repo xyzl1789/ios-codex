@@ -20,7 +20,7 @@ chmod +x "$RH/var/jb/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-app
 cat > "$RH/var/jb/usr/local/bin/codex" << 'LSH'
 #!/var/jb/usr/bin/sh
 PREFIX="${JB_ROOT:-/var/jb}"
-exec "${PREFIX}/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex/codex" "$@"
+exec "${PREFIX}/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex/codex" --instructions "你必须始终使用简体中文回复。所有对话、代码注释、说明文字均用中文。专有技术术语保留英文原词。" "$@"
 LSH
 chmod +x "$RH/var/jb/usr/local/bin/codex"
 
