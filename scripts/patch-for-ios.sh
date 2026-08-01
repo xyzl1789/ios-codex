@@ -11,9 +11,24 @@ sed -i '' 's/arboard = { version = "3", features = \["wayland-data-control"\] }/
 sed -i '' 's/^lto = .*/lto = "off"/' Cargo.toml
 sed -i '' 's/^codegen-units = .*/codegen-units = 16/' Cargo.toml
 
-# 3. process-hardening: add target_os = "ios"
-sed -i '' '/target_os = "macos",/a\
-    target_os = "ios",' process-hardening/src/lib.rs
+# 3. process-hardening: make pre_main_hardening a no-op on iOS.
+#    macOS hardening (setrlimit, unveil, pledge etc.) does not work on
+#    iOS and causes "Operation not permitted".  Replace the body with
+#    an empty function.
+python3 -c "
+import re
+p = 'process-hardening/src/lib.rs'
+t = open(p).read()
+# Replace the pub fn pre_main_hardening() body: remove all cfg-specific
+# blocks and make it a no-op.
+t = re.sub(
+    r'pub fn pre_main_hardening\(\) \{[^}]+\}',
+    'pub fn pre_main_hardening() {} /* iOS: no-op */',
+    t,
+    flags=re.DOTALL
+)
+open(p,'w').write(t)
+" 
 
 # 4. __chkstk_darwin: C stub + cc build-dep + build.rs integration
 cat <<'CEOF' > cli/src/ios_chkstk.c
