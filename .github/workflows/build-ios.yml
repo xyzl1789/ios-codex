@@ -50,9 +50,21 @@ jobs:
       - name: Patch process-hardening - add ios target
         run: |
           cd ~/codex-upstream
-          sed -i '' '/target_os = "macos",/a\
-              target_os = "ios",\
-          ' codex-rs/process-hardening/src/lib.rs
+          python3 -c "
+          path = 'codex-rs/process-hardening/src/lib.rs'
+          with open(path) as f:
+              content = f.read()
+          old = '    target_os = \"macos\",\n    target_os = \"freebsd\",'
+          new = '    target_os = \"macos\",\n    target_os = \"ios\",\n    target_os = \"freebsd\",'
+          if old not in content:
+              print('ERROR: expected adjacent macos/freebsd lines not found!')
+              raise SystemExit(1)
+          content = content.replace(old, new, 1)
+          assert 'target_os = \"ios\"' in content, 'patch failed'
+          with open(path, 'w') as f:
+              f.write(content)
+          print('ios target inserted into process-hardening cfg block')
+          "
 
       - name: Configure cargo for iOS
         run: |
