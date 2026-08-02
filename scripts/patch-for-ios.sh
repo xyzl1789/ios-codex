@@ -18,9 +18,21 @@ open('cli/src/main.rs','w').write(t)
 "
 fi
 
-# === process-hardening: skip hardening on iOS ===
-# Instead of patching lib.rs, just erase pre_main_hardening call from main.rs
-# (simpler, no risk of breaking compile)
-sed -i '' 's/codex_process_hardening::pre_main_hardening();/\/\* iOS: hardening disabled \*\/ if cfg!(not\(target_os = "ios"\)) { codex_process_hardening::pre_main_hardening(); }/' cli/src/main.rs
+# === process-hardening: add target_os = "ios" to cfg block ===
+python3 -c "
+path = 'process-hardening/src/lib.rs'
+with open(path) as f:
+    content = f.read()
+old = '    target_os = \"macos\",\n    target_os = \"freebsd\",'
+new = '    target_os = \"macos\",\n    target_os = \"ios\",\n    target_os = \"freebsd\",'
+if old not in content:
+    print('ERROR: expected adjacent macos/freebsd lines not found!')
+    raise SystemExit(1)
+content = content.replace(old, new, 1)
+assert 'target_os = \"ios\"' in content, 'patch failed'
+with open(path, 'w') as f:
+    f.write(content)
+print('ios target inserted into process-hardening cfg block')
+"
 
 echo "[ios-codex] patches applied"
