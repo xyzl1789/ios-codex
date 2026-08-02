@@ -1,0 +1,89 @@
+name: Build iOS Codex Binary
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    timeout-minutes: 120
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+          toolchain: "1.95.0"
+
+      - name: Clone upstream codex
+        run: git clone --depth 1 https://github.com/openai/codex ~/codex-upstream
+
+      - name: Apply Cargo.toml patches
+        run: |
+          cd ~/codex-upstream
+          sed -i '' 's/arboard = { version = "3", features = \["wayland-data-control"\] }/arboard = { version = "3" }/' codex-rs/Cargo.toml
+          sed -i '' 's/^lto = "thin"$/lto = "off"/' codex-rs/Cargo.toml
+          sed -i '' 's/^codegen-units = 4$/codegen-units = 16/' codex-rs/Cargo.toml
+
+      - name: Patch main.rs - add chkstk stub
+        run: |
+          cd ~/codex-upstream
+          python3 -c "
+          path = 'codex-rs/cli/src/main.rs'
+          with open(path) as f:
+              lines = f.readlines()
+          needle = 'use supports_color::Stream;\n'
+          idx = next(i for i, l in enumerate(lines) if l == needle)
+          stub = '''\n// iOS 13 toolchains can miss ___chkstk_darwin during final link when transitive\n// C deps (notably zstd) are built against newer SDK defaults.\n#[cfg(all(target_os = \"ios\", target_arch = \"aarch64\"))]\n#[unsafe(no_mangle)]\npub extern \"C\" fn __chkstk_darwin() {}\n'''
+          lines.insert(idx + 1, stub)
+          with open(path, 'w') as f:
+              f.writelines(lines)
+          print('stub inserted')
+          "
+
+      - name: Patch process-hardening - add ios target
+        run: |
+          cd ~/codex-upstream
+          sed -i '' '/target_os = "macos",/a\
+              target_os = "ios",\
+          ' codex-rs/process-hardening/src/lib.rs
+
+      - name: Configure cargo for iOS
+        run: |
+          mkdir -p ~/codex-upstream/codex-rs/.cargo
+          cat > ~/codex-upstream/codex-rs/.cargo/config.toml << 'EOF'
+          [target.aarch64-apple-ios]
+          rustflags = ["-C", "link-arg=-Wl,-undefined,dynamic_lookup"]
+          EOF
+
+      - name: Build codex for iOS
+        run: |
+          cd ~/codex-upstream/codex-rs
+          cargo +1.95.0 build --release --target aarch64-apple-ios -p codex-cli 2>&1 | tail -200
+
+      - name: Upload iOS binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-ios-arm64
+          path: ~/codex-upstream/codex-rs/target/aarch64-apple-ios/release/codex
+
+      - name: Package DEB
+        run: |
+          mkdir -p /tmp/pkg/debian/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex/
+          cp ~/codex-upstream/codex-rs/target/aarch64-apple-ios/release/codex /tmp/pkg/debian/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-ios/codex/
+          cp -a packaging/debian/DEBIAN /tmp/pkg/debian/
+          cp -a packaging/debian/usr /tmp/pkg/debian/usr/ 2>/dev/null || true
+          mkdir -p dist
+          dpkg-deb -b /tmp/pkg/debian dist/com.openai.codex-ios_latest_iphoneos-arm.deb
+
+      - name: Upload DEB
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-ios-deb
+          path: dist/*.deb
